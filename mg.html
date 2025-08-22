@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Medicine Catcher</title>
+  <style>
+    :root { --hud-bg: rgba(255,255,255,0.85); }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: system-ui, Arial, sans-serif;
+      background: #eef2f7 url('https://images.unsplash.com/photo-1586773860418-d37222d8fce3?q=80&w=1600&auto=format&fit=crop') center/cover fixed no-repeat;
+    }
+    .scrim {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.25);
+      display: grid; place-items: center;
+      pointer-events: none;
+    }
+    .panel {
+      pointer-events: auto;
+      width: min(640px, 92vw);
+      background: rgba(255,255,255,0.95);
+      backdrop-filter: blur(6px);
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    }
+    h1,h2,h3 { margin: 0.4em 0; }
+    .choices {
+      display: grid; gap: 10px; margin-top: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+    button {
+      padding: 12px 14px; border-radius: 12px; border: 0;
+      font-weight: 600; cursor: pointer;
+      background: #0ea5e9; color: #fff;
+      box-shadow: 0 6px 16px rgba(14,165,233,0.35);
+      transition: transform .08s ease, box-shadow .2s ease;
+    }
+    button:hover { transform: translateY(-1px); }
+    button:active { transform: translateY(1px); }
+    .btn-red { background:#ef4444; box-shadow:0 6px 16px rgba(239,68,68,.35); }
+    .btn-blue{ background:#3b82f6; box-shadow:0 6px 16px rgba(59,130,246,.35); }
+    .btn-green{background:#10b981; box-shadow:0 6px 16px rgba(16,185,129,.35); }
+    .btn-dark { background:#111827; }
+    #hud {
+      position: fixed; left: 50%; top: 10px;
+      transform: translateX(-50%);
+      display: flex; gap: 10px;
+      background: var(--hud-bg);
+      padding: 8px 12px;
+      border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+      align-items: center;
+      font-weight: 600;
+    }
+    #hud span { padding: 4px 8px; border-radius: 8px; }
+    #targetTag { background:#111827; color:#fff; }
+    #scoreTag { background:#f3f4f6; }
+    #timeTag  { background:#f3f4f6; }
+    canvas {
+      display:block;
+      margin: 80px auto 20px auto;
+      background: rgba(255,255,255,0.7);
+      border: 2px solid #111827;
+      border-radius: 14px;
+      box-shadow: 0 10px 32px rgba(0,0,0,0.25);
+      touch-action: none; /* better mobile drag */
+    }
+    @media (max-width: 480px) {
+      canvas { margin-top: 70px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- HUD -->
+  <div id="hud" style="display:none;">
+    <span id="targetTag">Collect: RED</span>
+    <span id="scoreTag">Score: 0</span>
+    <span id="timeTag">Time: 60s</span>
+    <button id="pauseBtn" class="btn-dark" style="margin-left:6px;">Pause</button>
+  </div>
+
+  <!-- Canvas -->
+  <canvas id="game" width="480" height="760"></canvas>
+
+  <!-- Start / Menu -->
+  <div id="menu" class="scrim">
+    <div class="panel">
+      <h2>What hurts today?</h2>
+      <p>Pick a symptom and collect the matching medicine capsules. Avoid the others.</p>
+      <div class="choices">
+        <button class="btn-red"  data-target="red"   data-label="Headache → RED">Headache (RED)</button>
+        <button class="btn-blue" data-target="blue"  data-label="Stomach ache → BLUE">Stomach ache (BLUE)</button>
+        <button class="btn-green"data-target="green" data-label="Hypertension → GREEN">High blood pressure (GREEN)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Game Over -->
+  <div id="gameover" class="scrim" style="display:none;">
+    <div class="panel" style="text-align:center;">
+      <h2>Great effort! 🏆</h2>
+      <p id="summary">You scored 0.</p>
+      <button id="againBtn">Play again</button>
+    </div>
+  </div>
+
+ <audio id="bgMusic" src="https://www.bensound.com/bensound-music/bensound-funkyelement.mp3" loop></audio>
+ <audio id="dingSound" src="https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"></audio>
+
+
+
+  <script>
+  (() => {
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    // Responsive canvas sizing
+    function fitCanvas() {
+      const w = Math.min(520, window.innerWidth - 24);
+      const h = Math.min(860, window.innerHeight - 120);
+      canvas.width = Math.max(360, w);
+      canvas.height = Math.max(600, h);
+      // keep catcher anchored near bottom after resize
+      catcher.y = canvas.height - 70;
+      clampCatcher();
+    }
+    window.addEventListener('resize', fitCanvas);
+
+    // UI elements
+    const hud = document.getElementById('hud');
+     const bgMusic = document.getElementById("bgMusic");
+     bgMusic.volume = 0.4;
+    const dingSound = document.getElementById("dingSound");
+    const targetTag = document.getElementById('targetTag');
+    const scoreTag = document.getElementById('scoreTag');
+    const timeTag = document.getElementById('timeTag');
+    const pauseBtn = document.getElementById('pauseBtn');
+    
+    const menu = document.getElementById('menu');
+    const menuButtons = menu.querySelectorAll('button[data-target]');
+    const over = document.getElementById('gameover');
+    const summary = document.getElementById('summary');
+    const againBtn = document.getElementById('againBtn');
+
+    // Game state
+    let state = 'menu'; // 'menu' | 'playing' | 'paused' | 'over'
+    let target = 'red';
+    let pills = [];
+    let score = 0;
+    let timeLeft = 60 * 1000; // ms
+    let lastTs = performance.now();
+    let spawnAcc = 0;
+    let dragging = false;
+    let playing = true;
+
+    const catcher = {
+      x: 100, y: 0, w: 120, h: 26, speed: 600
+    };
+
+    // Colors
+    const COLORS = {
+      red:   { main: '#e11d48', dark:'#a31132', label:'RED' },
+      blue:  { main: '#2563eb', dark:'#1d4ed8', label:'BLUE' },
+      green: { main: '#10b981', dark:'#0b8f6a', label:'GREEN' }
+    };
+
+    // ----- UI handlers -----
+    menuButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        target = btn.getAttribute('data-target');
+        startGame();
+      });
+    });
+    againBtn.addEventListener('click', () => {
+      over.style.display = 'none';
+      menu.style.display = 'grid';
+      state = 'menu';
+    });
+    pauseBtn.addEventListener('click', () => {
+      if (state === 'playing') {
+        state = 'paused';
+        pauseBtn.textContent = 'Resume';
+      } else if (state === 'paused') {
+        state = 'playing';
+        lastTs = performance.now(); // reset delta so timer doesn't jump
+        pauseBtn.textContent = 'Pause';
+      }
+    });
+
+    // Pause when tab hidden
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && state === 'playing') {
+        state = 'paused';
+        pauseBtn.textContent = 'Resume';
+      }
+    });
+
+    // ----- Input: mouse + touch drag -----
+    function setCatcherX(px) {
+      catcher.x = px - catcher.w / 2;
+      clampCatcher();
+    }
+    function clampCatcher() {
+      catcher.x = Math.max(0, Math.min(canvas.width - catcher.w, catcher.x));
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      if (state !== 'playing') return;
+      dragging = true;
+      const r = canvas.getBoundingClientRect();
+      setCatcherX(e.clientX - r.left);
+    });
+    canvas.addEventListener('mousemove', (e) => {
+      if (!dragging || state !== 'playing') return;
+      const r = canvas.getBoundingClientRect();
+      setCatcherX(e.clientX - r.left);
+    });
+    window.addEventListener('mouseup', () => dragging = false);
+
+    canvas.addEventListener('touchstart', (e) => {
+      if (state !== 'playing') return;
+      dragging = true;
+      const r = canvas.getBoundingClientRect();
+      const t = e.touches[0];
+      setCatcherX(t.clientX - r.left);
+      e.preventDefault();
+    }, { passive:false });
+    canvas.addEventListener('touchmove', (e) => {
+      if (!dragging || state !== 'playing') return;
+      const r = canvas.getBoundingClientRect();
+      const t = e.touches[0];
+      setCatcherX(t.clientX - r.left);
+      e.preventDefault();
+    }, { passive:false });
+    window.addEventListener('touchend', () => dragging = false);
+
+    // ----- Game control -----
+    function startGame() {
+      // reset
+      pills = [];
+      score = 0;
+      bgMusic.currentTime = 0;
+      bgMusic.play();
+
+      timeLeft = 60 * 1000;
+      spawnAcc = 0;
+      lastTs = performance.now();
+      catcher.x = (canvas.width - catcher.w) / 2;
+      catcher.y = canvas.height - 70;
+
+      targetTag.textContent = `Collect: ${COLORS[target].label}`;
+      scoreTag.textContent = `Score: ${score}`;
+      timeTag.textContent = `Time: ${Math.ceil(timeLeft/1000)}s`;
+      hud.style.display = 'flex';
+      menu.style.display = 'none';
+      pauseBtn.textContent = 'Pause';
+
+      state = 'playing';
+    }
+
+    // ----- Pills -----
+    function spawnPill() {
+      // 60% target color, 40% distractors
+      const r = Math.random();
+      let type;
+      if (r < 0.6) {
+        type = target;
+      } else {
+        const others = ['red','blue','green'].filter(c => c !== target);
+        type = others[(Math.random() * others.length) | 0];
+      }
+
+      const w = 48 + Math.random() * 14;   // BIGGER pills
+      const h = 22 + Math.random() * 6;
+      const x = Math.random() * (canvas.width - w);
+      const y = -h - 10;
+      const speed = 140 + Math.random() * 90; // px/sec
+      const angle = Math.random() * Math.PI;
+      const spin = (Math.random() * 0.8 - 0.4) * 0.8 * (Math.PI/180); // slow spin
+
+      pills.push({ x, y, w, h, speed, type, angle, spin });
+    }
+
+    function drawCatcher() {
+      // a rounded tray
+      const r = 12;
+      ctx.fillStyle = '#111827';
+      roundRect(ctx, catcher.x, catcher.y, catcher.w, catcher.h, r);
+      ctx.fill();
+      // top lip
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      roundRect(ctx, catcher.x, catcher.y, catcher.w, 6, 8);
+      ctx.fill();
+    }
+
+    // Draw realistic capsule pill (two-tone, seam, highlight, slight shadow)
+    function drawPill(p) {
+      const col = COLORS[p.type];
+
+      // Prepare
+      const cx = p.x + p.w/2, cy = p.y + p.h/2;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(p.angle);
+
+      // soft shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      roundRect(ctx, -p.w/2 + 2, -p.h/2 + 4, p.w, p.h, p.h/2);
+      ctx.fill();
+
+      // Capsule body (we'll draw halves using clipping)
+      // LEFT half (colored)
+      ctx.save();
+      ctx.beginPath();
+      roundRect(ctx, -p.w/2, -p.h/2, p.w, p.h, p.h/2);
+      ctx.clip();
+      ctx.beginPath();
+      ctx.rect(-p.w/2, -p.h/2, p.w/2, p.h);
+      ctx.clip();
+
+      const gradL = ctx.createLinearGradient(-p.w/2, -p.h/2, -p.w/2, p.h/2);
+      gradL.addColorStop(0, lighten(col.main, 0.15));
+      gradL.addColorStop(1, col.dark);
+      ctx.fillStyle = gradL;
+      roundRect(ctx, -p.w/2, -p.h/2, p.w, p.h, p.h/2);
+      ctx.fill();
+      ctx.restore();
+
+      // RIGHT half (white)
+      ctx.save();
+      ctx.beginPath();
+      roundRect(ctx, -p.w/2, -p.h/2, p.w, p.h, p.h/2);
+      ctx.clip();
+      ctx.beginPath();
+      ctx.rect(0, -p.h/2, p.w/2, p.h);
+      ctx.clip();
+
+      const gradR = ctx.createLinearGradient(0, -p.h/2, 0, p.h/2);
+      gradR.addColorStop(0, '#ffffff');
+      gradR.addColorStop(1, '#e5e7eb');
+      ctx.fillStyle = gradR;
+      roundRect(ctx, -p.w/2, -p.h/2, p.w, p.h, p.h/2);
+      ctx.fill();
+      ctx.restore();
+
+      // Center seam band
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fillRect(-2, -p.h/2, 4, p.h);
+
+      // Glossy highlight
+      ctx.beginPath();
+      ctx.ellipse(-p.w/6, -p.h/4, p.w/6, p.h/3, -0.2, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.fill();
+
+      // Outline
+      ctx.lineWidth = 1.25;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      roundRect(ctx, -p.w/2, -p.h/2, p.w, p.h, p.h/2);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function roundRect(ctx, x, y, w, h, r=10) {
+      const rr = Math.min(r, h/2, w/2);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    }
+
+    function lighten(hex, amt) {
+      // simple lighten for hex #rrggbb
+      const n = hex.replace('#','');
+      const r = Math.min(255, Math.max(0, parseInt(n.substr(0,2),16) + Math.round(255*amt)));
+      const g = Math.min(255, Math.max(0, parseInt(n.substr(2,2),16) + Math.round(255*amt)));
+      const b = Math.min(255, Math.max(0, parseInt(n.substr(4,2),16) + Math.round(255*amt)));
+      return `rgb(${r},${g},${b})`;
+    }
+
+    // ----- Loop -----
+    function loop(ts) {
+      requestAnimationFrame(loop);
+      // Draw only
+      if (state === 'menu') return drawScene();
+      if (state === 'paused') return drawScene();
+
+      const dt = Math.min(50, ts - lastTs); // clamp
+      lastTs = ts;
+
+      // timer
+      timeLeft -= dt;
+      if (timeLeft <= 0) {
+        timeLeft = 0;
+        endGame();
+        return drawScene();
+      }
+
+      // spawn control (no setInterval → respects pause/hidden)
+      spawnAcc += dt;
+      const spawnEvery = 900; // ms
+      while (spawnAcc >= spawnEvery) {
+        spawnPill();
+        spawnAcc -= spawnEvery;
+      }
+
+      // update pills
+      for (let i = pills.length - 1; i >= 0; i--) {
+        const p = pills[i];
+        p.y += (p.speed * dt) / 1000;
+        p.angle += p.spin;
+
+        // collision with catcher (simple AABB on pill bounds)
+        if (rectsOverlap(p.x, p.y, p.w, p.h, catcher.x, catcher.y, catcher.w, catcher.h)) {
+          dingSound.play();
+            if (p.type === target)
+          
+          score += 1;
+          else score = Math.max(0, score - 1);
+          pills.splice(i,1);
+          continue;
+        }
+
+        // off screen
+        if (p.y - p.h > canvas.height + 20) {
+          pills.splice(i,1);
+        }
+      }
+
+      drawScene();
+    }
+
+    function rectsOverlap(x1,y1,w1,h1,x2,y2,w2,h2) {
+      return !(x1 + w1 < x2 || x1 > x2 + w2 || y1 + h1 < y2 || y1 > y2 + h2);
+    }
+
+    function drawScene() {
+      // clear
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      // backdrop wash
+      const grad = ctx.createLinearGradient(0,0,0,canvas.height);
+      grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+      grad.addColorStop(1, 'rgba(255,255,255,0.6)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+
+      // pills
+      for (const p of pills) drawPill(p);
+
+      // catcher
+      drawCatcher();
+
+      // HUD live values
+      if (state === 'playing' || state === 'paused') {
+        targetTag.textContent = `Collect: ${COLORS[target].label}`;
+        scoreTag.textContent = `Score: ${score}`;
+        timeTag.textContent = `Time: ${Math.ceil(timeLeft/1000)}s`;
+      }
+
+      // overlays are handled by HTML panels
+    }
+
+    function endGame() {
+      state = 'over';
+      bgMusic.pause();
+      bgMusic.currentTime = 0;
+
+      hud.style.display = 'none';
+      summary.textContent = `You scored ${score}.`;
+      over.style.display = 'grid';
+    }
+
+    // init
+    fitCanvas();
+    drawScene();
+    requestAnimationFrame(loop);
+  })();
+
+   
+  </script>
+</body>
+</html>
